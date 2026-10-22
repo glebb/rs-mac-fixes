@@ -8,7 +8,8 @@
 // status     shows what is installed.
 //
 // Run without arguments (e.g. double-clicked in Finder) it shows the status and asks.
-// The game folder is found in the Steam libraries; --game <folder> overrides.
+// The game folder is found in the Steam libraries; --game <folder> overrides. If it isn't found
+// and this runs in a terminal, it asks for the folder (drag and drop from Finder works).
 #include <errno.h>
 #include <fcntl.h>
 #include <libproc.h>
@@ -34,6 +35,8 @@ static char g_exe[PATH_MAX];
 
 // ---------------------------------------------------------------- finding the game
 
+#define APP_ID "221680"  // Rocksmith 2014 on Steam
+
 static int is_game_dir(const char *dir) {
     char p[PATH_MAX];
     snprintf(p, sizeof p, "%s/" EXE_IN_APP "/Rocksmith2014", dir);
@@ -45,36 +48,129 @@ static void set_game(const char *dir) {
     snprintf(g_exe, sizeof g_exe, "%s/Rocksmith2014", g_macos);
 }
 
-// Steam lists its library folders in libraryfolders.vdf as lines like:  "path"  "/Volumes/Games"
+// Accepts the game folder, Rocksmith2014.app, its Contents/MacOS folder or the executable, so
+// whatever the user drags in from Finder works.
+static int use_game_path(const char *path) {
+    char p[PATH_MAX];
+    snprintf(p, sizeof p, "%s", path);
+    size_t n = strlen(p);
+    while (n > 1 && p[n - 1] == '/') p[--n] = 0;
+    static const char *tails[] = {"/Rocksmith2014.app/Contents/MacOS/Rocksmith2014", "/Rocksmith2014.app/Contents/MacOS",
+                                  "/Rocksmith2014.app/Contents", "/Rocksmith2014.app"};
+    for (size_t i = 0; i < sizeof tails / sizeof *tails; i++) {
+        size_t t = strlen(tails[i]);
+        if (n > t && !strcmp(p + n - t, tails[i])) {
+            p[n - t] = 0;
+            break;
+        }
+    }
+    if (!is_game_dir(p)) return 0;
+    char real[PATH_MAX];
+    set_game(realpath(p, real) ? real : p);
+    return 1;
+}
+
+// Reads the value of the first  "key"  "value"  line in a Steam .vdf/.acf file into out,
+// starting at *pos (which is advanced past it). Backslash escapes in the value are undone.
+static int vdf_next(const char *text, size_t *pos, const char *key, char *out, size_t n) {
+    char k[64];
+    snprintf(k, sizeof k, "\"%s\"", key);
+    const char *at = strstr(text + *pos, k);
+    if (!at) return 0;
+    const char *a = strchr(at + strlen(k), '"');
+    if (!a) return 0;
+    size_t o = 0;
+    for (a++; *a && *a != '"' && *a != '\n'; a++) {
+        if (*a == '\\' && a[1]) a++;
+        if (o + 1 < n) out[o++] = *a;
+    }
+    out[o] = 0;
+    *pos = (size_t)(a - text);
+    return 1;
+}
+
+static char *read_text(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return NULL;
+    size_t cap = 1 << 16, len = 0;
+    char *t = malloc(cap + 1);
+    if (t) len = fread(t, 1, cap, f), t[len] = 0;
+    fclose(f);
+    return t;
+}
+
+// The game is in <library>/steamapps/common/<installdir>; installdir comes from the app's
+// manifest (normally "Rocksmith2014").
+static int try_library(const char *lib) {
+    char p[PATH_MAX], dir[PATH_MAX] = "Rocksmith2014";
+    snprintf(p, sizeof p, "%s/steamapps/appmanifest_" APP_ID ".acf", lib);
+    char *acf = read_text(p);
+    size_t pos = 0;
+    if (acf) vdf_next(acf, &pos, "installdir", dir, sizeof dir);
+    free(acf);
+    snprintf(p, sizeof p, "%s/steamapps/common/%s", lib, dir);
+    if (is_game_dir(p)) return set_game(p), 1;
+    snprintf(p, sizeof p, "%s/steamapps/common/Rocksmith2014", lib);
+    return is_game_dir(p) ? (set_game(p), 1) : 0;
+}
+
+// Steam lists its libraries in libraryfolders.vdf as lines like:  "path"  "/Volumes/Games".
+// Libraries on drives that aren't connected are skipped (they can't be patched anyway).
 static int find_game(void) {
     const char *home = getenv("HOME");
     if (!home) return 0;
-    char steam[PATH_MAX], p[PATH_MAX];
+    char steam[PATH_MAX], p[PATH_MAX], lib[PATH_MAX];
     snprintf(steam, sizeof steam, "%s/Library/Application Support/Steam", home);
-    snprintf(p, sizeof p, "%s/steamapps/common/Rocksmith2014", steam);
-    if (is_game_dir(p)) {
-        set_game(p);
-        return 1;
+    if (try_library(steam)) return 1;
+    static const char *lists[] = {"steamapps/libraryfolders.vdf", "config/libraryfolders.vdf"};
+    for (size_t i = 0; i < sizeof lists / sizeof *lists; i++) {
+        snprintf(p, sizeof p, "%s/%s", steam, lists[i]);
+        char *vdf = read_text(p);
+        if (!vdf) continue;
+        size_t pos = 0;
+        int found = 0;
+        while (!found && vdf_next(vdf, &pos, "path", lib, sizeof lib)) found = try_library(lib);
+        free(vdf);
+        if (found) return 1;
     }
-    snprintf(p, sizeof p, "%s/steamapps/libraryfolders.vdf", steam);
-    FILE *f = fopen(p, "r");
-    if (!f) return 0;
-    char line[PATH_MAX + 64];
-    int found = 0;
-    while (!found && fgets(line, sizeof line, f)) {
-        char *k = strstr(line, "\"path\"");
-        if (!k) continue;
-        char *a = strchr(k + 6, '"'), *b = a ? strchr(a + 1, '"') : NULL;
-        if (!a || !b) continue;
-        *b = 0;
-        snprintf(p, sizeof p, "%s/steamapps/common/Rocksmith2014", a + 1);
-        if (is_game_dir(p)) {
-            set_game(p);
-            found = 1;
+    static const char *others[] = {"/Applications/Rocksmith2014", "/Applications/Rocksmith 2014"};
+    for (size_t i = 0; i < sizeof others / sizeof *others; i++)
+        if (is_game_dir(others[i])) return set_game(others[i]), 1;
+    snprintf(p, sizeof p, "%s/Applications/Rocksmith2014", home);
+    return is_game_dir(p) ? (set_game(p), 1) : 0;
+}
+
+// Asks for the game folder; dragging a folder from Finder into Terminal types its path, quoted
+// or with backslash-escaped spaces, plus a trailing space.
+static int ask_game(void) {
+    for (;;) {
+        printf("Drag the Rocksmith2014 folder (or Rocksmith2014.app) into this window and press Return,\n"
+               "or just press Return to quit.\n> ");
+        fflush(stdout);
+        char line[PATH_MAX + 16], path[PATH_MAX];
+        if (!fgets(line, sizeof line, stdin)) return 0;
+        char *s = line, *e = line + strlen(line);
+        while (e > s && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
+        while (*s == ' ' || *s == '\t') s++;
+        if (!*s) return 0;
+        if ((*s == '\'' || *s == '"') && e - s >= 2 && e[-1] == *s) s++, *--e = 0;
+        size_t o = 0;
+        for (; *s && o + 1 < sizeof path; s++) {
+            if (*s == '\\' && s[1]) s++;
+            path[o++] = *s;
         }
+        path[o] = 0;
+        if (path[0] == '~' && path[1] == '/' && getenv("HOME")) {
+            char tmp[PATH_MAX];
+            snprintf(tmp, sizeof tmp, "%s%s", getenv("HOME"), path + 1);
+            snprintf(path, sizeof path, "%s", tmp);
+        }
+        if (use_game_path(path)) {
+            printf("\n");
+            return 1;
+        }
+        printf("\n%s doesn't contain " EXE_IN_APP "/Rocksmith2014.\n\n", path);
     }
-    fclose(f);
-    return found;
 }
 
 static int game_running(void) {
@@ -351,7 +447,7 @@ static int uninstall(void) {
 }
 
 static void usage(void) {
-    printf("usage: rs-mac-fixes [install | uninstall | status] [--game <Rocksmith2014 folder>]\n");
+    printf("usage: rs-mac-fixes [install | uninstall | status] [--game <Rocksmith2014 folder or .app>]\n");
 }
 
 int main(int argc, char **argv) {
@@ -364,18 +460,21 @@ int main(int argc, char **argv) {
     }
     if (cmd && strcmp(cmd, "install") && strcmp(cmd, "uninstall") && strcmp(cmd, "status")) return usage(), 2;
     printf("Rocksmith 2014 Mac Fixes\n\n");
+    int interactive = !cmd;
     if (game) {
-        if (!is_game_dir(game)) {
+        if (!use_game_path(game)) {
             printf("%s doesn't contain " EXE_IN_APP "/Rocksmith2014\n", game);
             return 1;
         }
-        set_game(game);
     } else if (!find_game()) {
-        printf("Rocksmith 2014 wasn't found in your Steam libraries.\n"
-               "Run this from Terminal with: --game <path to the Rocksmith2014 folder>\n");
-        return 1;
+        printf("Rocksmith 2014 wasn't found in your Steam libraries (is the drive it's on connected?).\n");
+        if (!isatty(STDIN_FILENO)) {
+            printf("Run this again with: --game <path to the Rocksmith2014 folder>\n");
+            return 1;
+        }
+        printf("\n");
+        if (!ask_game()) return 1;
     }
-    int interactive = !cmd;
     if (interactive) {
         status();
         printf("\n[i] install or update   [u] uninstall   [q] quit\n> ");

@@ -35,8 +35,11 @@ chmod +x rs-mac-fixes
 ./rs-mac-fixes uninstall
 ```
 
-The installer finds the game in your Steam libraries. If it is somewhere else, add
-`--game "/path/to/Rocksmith2014"` (the folder that holds `Rocksmith2014.app`).
+The installer finds the game in your Steam libraries, including ones on other drives (connect
+the drive first). If it can't find the game, it asks for it: drag the `Rocksmith2014` folder
+or `Rocksmith2014.app` from Finder into the Terminal window and press Return. In Terminal you
+can also give the location up front with `--game "/path/to/Rocksmith2014"` (the folder that
+holds `Rocksmith2014.app`, or the app itself).
 
 ## Uninstall
 
