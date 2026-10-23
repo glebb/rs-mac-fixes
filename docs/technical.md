@@ -117,3 +117,17 @@ match.
 
 Letters such as `ä ö å` can't be added this way: the search text builder accepts only some
 keys (mapping them to the `'` `;` `[` keys added nothing).
+
+## Diagnostics
+
+Each start of the library logs one line with its version (`git describe`, from `build.sh`), the
+macOS version, the CPU and whether the game runs under Rosetta (`sysctl.proc_translated`). If
+the segment layout is unknown, the segments are logged; if the expected code never appears, each
+site that differs is logged with its first 16 bytes found and expected. A log over 1 MB is
+moved to `rs-mac-fixes.log.old` at startup. The library creates the log as soon as it loads, so a
+missing log with the fixes installed means dyld didn't load it.
+
+`rs-mac-fixes report` writes `~/Desktop/rs-mac-fixes-report.txt`: system, the executable's
+architectures, `__TEXT` size, non-system libraries it loads, code signature, whether the
+installed library matches the installer's, quarantine attributes, settings and the last 64 KB of
+the log, with `$HOME` replaced by `~`.

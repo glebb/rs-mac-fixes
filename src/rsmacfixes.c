@@ -40,8 +40,14 @@
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifndef BUILD_ID
+#define BUILD_ID "unknown"  // build.sh passes the git version
+#endif
+#define LOG_MAX (1 << 20)  // a longer log is moved to rs-mac-fixes.log.old at startup
 
 // Addresses in the unslid x86_64 image (vmaddr 0x100000000).
 #define TABLE_PTR 0x101949588ULL  // the hash table: +0x08 buckets, +0x10 buckets end, +0x20 count
@@ -107,6 +113,22 @@ static int matches(const site *s) {
     uint8_t want[128];
     size_t n = unhex(s->orig, want);
     return !memcmp((const void *)(s->addr + g_slide), want, n);
+}
+
+// For bug reports: what is at a site that didn't match (first 16 bytes), next to what was expected.
+static void log_mismatch(const site *s) {
+    if (matches(s)) return;
+    uint8_t want[128];
+    size_t n = unhex(s->orig, want);
+    if (n > 16) n = 16;
+    const uint8_t *have = (const uint8_t *)(s->addr + g_slide);
+    char h[33], w[33];
+    for (size_t i = 0; i < n; i++) {
+        snprintf(h + 2 * i, 3, "%02x", have[i]);
+        snprintf(w + 2 * i, 3, "%02x", want[i]);
+    }
+    h[2 * n] = w[2 * n] = 0;
+    logline("  %s at 0x%llx: found %s, expected %s", s->name, s->addr, h, w);
 }
 
 static int write_code(uint64_t addr, const uint8_t *bytes, size_t n) {
@@ -239,8 +261,12 @@ static void hook_path_md5_install(void) {
 
 static void *stats(void *arg) {
     (void)arg;
+    unsigned long last = (unsigned long)-1;
     for (int i = 0; i < 30; i++) {
         sleep(10);
+        unsigned long now = g_hits + g_misses + g_installed + g_frames;
+        if (now == last) continue;  // only when something changed
+        last = now;
         logline("path MD5 cache: %lu hits, %lu misses; packages: %lu in %lu batched frames", g_hits,
                 g_misses, g_installed, g_frames);
     }
@@ -412,7 +438,10 @@ static void *worker(void *arg) {
         if (!ready) usleep(200);
     }
     if (!ready) {
-        logline("expected code not found (other game version?); not patching");
+        logline("expected code not found (other game version?); not patching. Differences:");
+        log_mismatch(&md5);
+        log_mismatch(&step);
+        for (size_t k = 0; k < NSITES; k++) log_mismatch(&SITES[k]);
         return NULL;
     }
     // The path table and its lock are created later; the hook only runs once the game uses them.
@@ -423,7 +452,9 @@ static void *worker(void *arg) {
         key_hook("key down", FN_KEY_DOWN, (void *)&hook_key_down);
         key_hook("key up", FN_KEY_UP, (void *)&hook_key_up);
     } else {
-        logline("key down/up code differs; keys not added");
+        logline("key down/up code differs; keys not added. Differences:");
+        log_mismatch(&kd);
+        log_mismatch(&ku);
     }
     pthread_t t;
     pthread_create(&t, NULL, stats, NULL);
@@ -469,6 +500,20 @@ static int known_image(const struct mach_header *h) {
     return found == 3;
 }
 
+static void log_segments(const struct mach_header *h) {
+    if (!h || h->magic != MH_MAGIC_64) {
+        logline("  executable header: magic 0x%x", h ? h->magic : 0);
+        return;
+    }
+    const struct mach_header_64 *h64 = (const struct mach_header_64 *)h;
+    const uint8_t *p = (const uint8_t *)(h64 + 1);
+    for (uint32_t i = 0; i < h64->ncmds; i++, p += ((const struct load_command *)p)->cmdsize) {
+        const struct segment_command_64 *sc = (const void *)p;
+        if (sc->cmd == LC_SEGMENT_64)
+            logline("  segment %.16s: vmaddr 0x%llx, size 0x%llx", sc->segname, sc->vmaddr, sc->vmsize);
+    }
+}
+
 __attribute__((constructor)) static void init(void) {
     clock_gettime(CLOCK_MONOTONIC, &g_t0);
     char dir[1024], path[1100];
@@ -477,8 +522,27 @@ __attribute__((constructor)) static void init(void) {
     snprintf(dir, sizeof dir, "%s/Library/Application Support/rs-mac-fixes", home);
     mkdir(dir, 0755);
     snprintf(path, sizeof path, "%s/rs-mac-fixes.log", dir);
+    struct stat st;
+    if (stat(path, &st) == 0 && st.st_size > LOG_MAX) {
+        char old[1110];
+        snprintf(old, sizeof old, "%s.old", path);
+        rename(path, old);
+    }
     g_log = fopen(path, "a");
     if (g_log) setvbuf(g_log, NULL, _IONBF, 0);
+    // One line per start with what a bug report needs about the system.
+    char os[32] = "?", cpu[128] = "?";
+    size_t n = sizeof os;
+    sysctlbyname("kern.osproductversion", os, &n, NULL, 0);
+    n = sizeof cpu;
+    sysctlbyname("machdep.cpu.brand_string", cpu, &n, NULL, 0);
+    int translated = 0, arm = 0;
+    n = sizeof translated;
+    sysctlbyname("sysctl.proc_translated", &translated, &n, NULL, 0);
+    n = sizeof arm;
+    sysctlbyname("hw.optional.arm64", &arm, &n, NULL, 0);
+    logline("==== rs-mac-fixes %s started; macOS %s; %s Mac (%s); game runs %s", BUILD_ID, os,
+            arm || translated ? "Apple Silicon" : "Intel", cpu, translated ? "under Rosetta" : "natively");
     snprintf(path, sizeof path, "%s/disabled", dir);
     if (access(path, F_OK) == 0) {
         logline("disabled (%s exists); not patching", path);
@@ -513,6 +577,7 @@ __attribute__((constructor)) static void init(void) {
     const struct mach_header *h = _dyld_get_image_header(0);
     if (!known_image(h)) {
         logline("unknown Rocksmith2014 build (segment layout differs); not patching");
+        log_segments(h);
         return;
     }
     g_slide = (intptr_t)h - (intptr_t)0x100000000;

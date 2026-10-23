@@ -35,6 +35,7 @@ chmod +x rs-mac-fixes
 ./rs-mac-fixes install
 ./rs-mac-fixes status
 ./rs-mac-fixes uninstall
+./rs-mac-fixes report
 ```
 
 The installer finds the game in your Steam libraries, including ones on other drives (connect
@@ -73,7 +74,15 @@ Folder…, then paste the path). Create the folder if it isn't there.
 | `budget_ms` | How many milliseconds per screen refresh the game spends loading songs at startup. Default 50. Lower is smoother but slower; `0` loads one song per refresh, as the game normally does. Example: `echo 20 > ~/Library/Application\ Support/rs-mac-fixes/budget_ms` |
 | `disabled` | If this file exists, the fixes do nothing. An empty file is enough: `touch ~/Library/Application\ Support/rs-mac-fixes/disabled` |
 
-The fixes write a short log there too, `rs-mac-fixes.log`, which helps with bug reports.
+The fixes write a short log there too, `rs-mac-fixes.log`.
+
+## Something not working?
+
+Start Rocksmith once with the fixes installed and quit it. Then open `rs-mac-fixes` again and
+type `r` (or run `./rs-mac-fixes report`). This writes `rs-mac-fixes-report.txt` to your
+Desktop and shows it in Finder; attach that file to your bug report. It lists your macOS
+version, Mac type, what is installed in the game folder (other mods included) and the end of
+the fixes' log. Your home folder is shown as `~`, so it doesn't include your user name.
 
 ## What the installer changes
 

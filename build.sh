@@ -4,12 +4,14 @@
 set -e
 cd "$(dirname "$0")"
 mkdir -p build
+# Shown by the installer and in the log, so bug reports say which version they are about.
+ID="$(git describe --tags --always --dirty 2>/dev/null || echo unknown)"
 # The library runs inside the game, which is x86_64 (under Rosetta on Apple Silicon).
-clang -arch x86_64 -mmacosx-version-min=10.13 -O2 -Wall -Wextra -dynamiclib \
+clang -arch x86_64 -mmacosx-version-min=10.13 -O2 -Wall -Wextra -DBUILD_ID="\"$ID\"" -dynamiclib \
     -install_name @executable_path/librsmacfixes.dylib -o build/librsmacfixes.dylib src/rsmacfixes.c
 codesign -f -s - build/librsmacfixes.dylib
 (cd build && xxd -i librsmacfixes.dylib > payload.h)
-clang -arch arm64 -arch x86_64 -mmacosx-version-min=10.13 -O2 -Wall -Wextra -Ibuild \
+clang -arch arm64 -arch x86_64 -mmacosx-version-min=10.13 -O2 -Wall -Wextra -DBUILD_ID="\"$ID\"" -Ibuild \
     -o build/rs-mac-fixes src/installer.c
 codesign -f -s - build/rs-mac-fixes
 # Releases ship as a zip: a downloaded bare file loses its executable bit.
