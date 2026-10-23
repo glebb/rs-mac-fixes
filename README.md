@@ -10,8 +10,8 @@ Intel Macs should work the same but are untested.
   it did nothing.
 - **Space works in the song search**, so you can search for "black sabbath". Before, spaces
   were ignored in the search box.
-- **The keyboard works in Scale Racer.** Arrows, Enter, Esc and other keys did nothing in its
-  menu before.
+- **The keyboard works in the Guitarcade games**, such as Scale Racer. Before, arrows, Enter,
+  Esc and other keys did nothing in their menus.
 
 The fixes don't touch your songs, saves or settings. They work alongside other mods, such as
 the custom-song patch.

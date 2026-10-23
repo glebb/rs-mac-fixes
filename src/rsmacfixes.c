@@ -336,9 +336,9 @@ static void *keys(void *arg) {
 // through 0x101921c60 to a KEY_* index into the state array 0x101922060, which code such as the
 // song search and the Scale Racer menu reads. That table holds only digits and letters, and the
 // caller passes just the low byte of the character (Cocoa's 0xF700 for Up arrives as 0), so space,
-// Enter, Esc, arrows, function keys and punctuation never reached the game keyboard. Both functions are replaced:
-// the entry stub also loads the full character, which the caller keeps at -0x28(%rbp), and keys
-// the table lacks are mapped from it. KEY_* values are the game's own (set with their names at
+// Enter, Esc, arrows, function keys and punctuation never reached the game keyboard. Both functions
+// are replaced: the entry stub also loads the full character, which the caller keeps at
+// -0x28(%rbp), and keys the table lacks are mapped from it. KEY_* values are the game's own (set with their names at
 // 0x100b7f700 onwards), not DirectInput's.
 #define FN_KEY_DOWN 0x101135520ULL
 #define FN_KEY_UP 0x101135560ULL
@@ -375,7 +375,8 @@ static void set_key(int c, uint32_t full, uint32_t down) {
     if (key <= 0)
         for (size_t i = 0; i < NEXTRAKEYS; i++)
             if (EXTRA_KEYS[i].ch == full) key = EXTRA_KEYS[i].key;
-    if (key > 0 && key <= 0xff) ((uint32_t *)(KEY_STATE + g_slide))[key] = down;
+    // As the original: a character without a key still sets entry 0 (KEY_NOKEY).
+    if (key >= 0 && key <= 0xff) ((uint32_t *)(KEY_STATE + g_slide))[key] = down;
 }
 
 static void hook_key_down(void *self, int c, uint32_t full) {
