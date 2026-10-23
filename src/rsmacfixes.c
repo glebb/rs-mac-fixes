@@ -17,7 +17,8 @@
 // 4. Mounted archives stay open for a while; with many mounted per frame the game would exceed
 //    the 256 open files that launchd allows by default and skip songs, so the limit is raised.
 //
-// Keyboard: End in menus and space in the song search (see keys()).
+// Keyboard: End in menus (see keys()), and space, Enter, Esc, arrows and other keys for code that
+// reads the game keyboard, such as the song search and the Scale Racer menu (see set_key).
 //
 // The game's code is encrypted on disk and decrypted by its start routine after libraries
 // load, so a thread waits for the expected original bytes to appear and patches only then.
@@ -291,13 +292,10 @@ static void batch_install_step_install(void) {
 
 // ---------------------------------------------------------------- keyboard tables
 
-// Two key tables that the game fills at startup lack entries a Mac keyboard needs:
-// - 0x101909f20: macOS key code -> Scaleform key code (menus). kVK_Home (0x73) has Home, but
-//   kVK_End (0x77) is missing, so End does nothing in the song list.
-// - 0x101921c60: typed character -> game KEY_* (the keyboard the search box reads). It holds
-//   only 0-9, A-Z and a-z, so a typed space never reaches the search text.
-// Each is added once the game has filled its table (checked by a known entry), and re-added
-// should the table be rebuilt.
+// 0x101909f20, filled by the game at startup, maps macOS key codes to Scaleform key codes (menus).
+// kVK_Home (0x73) has Home, but kVK_End (0x77) is missing, so End does nothing in the song list.
+// The entry is added once the game has filled the table (checked by a known entry), and re-added
+// should the table be rebuilt. (Keys missing from the game keyboard are mapped in set_key.)
 typedef struct {
     const char *name;
     uint64_t table, index;
@@ -308,7 +306,6 @@ typedef struct {
 
 static const key_fix KEY_FIXES[] = {
     {"End key (menus)", 0x101909f20, 0x77, 0x23, 0x73, 0x24},
-    {"space in typed text", 0x101921c60, ' ', 0x39, 'a', 0x1e},
 };
 #define NKEYFIXES (sizeof KEY_FIXES / sizeof KEY_FIXES[0])
 
@@ -333,6 +330,75 @@ static void *keys(void *arg) {
     return NULL;
 }
 
+// ---------------------------------------------------------------- game keyboard keys
+
+// 0x101135520 / 0x101135560 (key down / up, called only from 0x100ba1190): characters 1-255 go
+// through 0x101921c60 to a KEY_* index into the state array 0x101922060, which code such as the
+// song search and the Scale Racer menu reads. That table holds only digits and letters, and the
+// caller passes just the low byte of the character (Cocoa's 0xF700 for Up arrives as 0), so space,
+// Enter, Esc, arrows, function keys and punctuation never reached the game keyboard. Both functions are replaced:
+// the entry stub also loads the full character, which the caller keeps at -0x28(%rbp), and keys
+// the table lacks are mapped from it. KEY_* values are the game's own (set with their names at
+// 0x100b7f700 onwards), not DirectInput's.
+#define FN_KEY_DOWN 0x101135520ULL
+#define FN_KEY_UP 0x101135560ULL
+#define CHAR_TO_KEY 0x101921c60ULL
+#define KEY_STATE 0x101922060ULL
+static const char KEY_DOWN_ORIG[] =
+    "554889e58d46ff3dfe00000077244863c6488d0d28c77e0048630481483dff000000770e488d0d15cb7e00c70481010000005dc3";
+static const char KEY_UP_ORIG[] =
+    "554889e58d46ff3dfe00000077244863c6488d0de8c67e0048630481483dff000000770e488d0dd5ca7e00c70481000000005dc3";
+
+static const struct {
+    uint32_t ch;  // full character as Cocoa reports it
+    uint8_t key;  // game KEY_*
+} EXTRA_KEYS[] = {
+    {' ', 0x39},                                             // KEY_SPACE
+    {0x0d, 0x1c}, {0x03, 0x1c},                              // Return, keypad Enter: KEY_RETURN
+    {0x1b, 0x01},                                            // KEY_ESCAPE
+    {0x09, 0x0f}, {0x19, 0x0f},                              // Tab, Shift+Tab: KEY_TAB
+    {0x7f, 0x0e}, {0x08, 0x0e},                              // Delete (backspace): KEY_BACK
+    {0xF700, 0x79}, {0xF701, 0x7e}, {0xF702, 0x7b}, {0xF703, 0x7c},  // KEY_UP, DOWN, LEFT, RIGHT
+    {0xF704, 0x3b}, {0xF705, 0x3c}, {0xF706, 0x3d}, {0xF707, 0x3e}, {0xF708, 0x3f},  // KEY_F1..F5
+    {0xF709, 0x40}, {0xF70A, 0x41}, {0xF70B, 0x42}, {0xF70C, 0x43}, {0xF70D, 0x44},  // KEY_F6..F10
+    {0xF70E, 0x55}, {0xF70F, 0x56},                                                  // KEY_F11, F12
+    {0xF728, 0x81}, {0xF729, 0x78}, {0xF72B, 0x7d},          // forward delete, Home, End
+    {0xF72C, 0x7a}, {0xF72D, 0x7f},                          // Page Up (KEY_PRIOR), Page Down (KEY_NEXT)
+    {'-', 0x0c}, {'=', 0x0d}, {'[', 0x1a}, {']', 0x1b}, {';', 0x27}, {'\'', 0x28},
+    {'`', 0x29}, {'\\', 0x2b}, {',', 0x33}, {'.', 0x34}, {'/', 0x35},
+};
+#define NEXTRAKEYS (sizeof EXTRA_KEYS / sizeof EXTRA_KEYS[0])
+
+static void set_key(int c, uint32_t full, uint32_t down) {
+    int64_t key = -1;
+    if (c >= 1 && c <= 255) key = ((int32_t *)(CHAR_TO_KEY + g_slide))[c];
+    if (key <= 0)
+        for (size_t i = 0; i < NEXTRAKEYS; i++)
+            if (EXTRA_KEYS[i].ch == full) key = EXTRA_KEYS[i].key;
+    if (key > 0 && key <= 0xff) ((uint32_t *)(KEY_STATE + g_slide))[key] = down;
+}
+
+static void hook_key_down(void *self, int c, uint32_t full) {
+    (void)self;
+    set_key(c, full, 1);
+}
+
+static void hook_key_up(void *self, int c, uint32_t full) {
+    (void)self;
+    set_key(c, full, 0);
+}
+
+static void key_hook(const char *name, uint64_t addr, void *target) {
+    // mov -0x28(%rbp), %edx (the caller's full character); movabs $target, %rax; jmp *%rax
+    uint8_t code[15] = {0x8B, 0x55, 0xD8, 0x48, 0xB8};
+    uint64_t t = (uint64_t)(uintptr_t)target;
+    memcpy(code + 5, &t, 8);
+    code[13] = 0xFF;
+    code[14] = 0xE0;
+    int r = write_code(addr + g_slide, code, sizeof code);
+    logline("hooked %s at 0x%llx: %s", name, addr, r ? "FAILED" : "ok");
+}
+
 static void *worker(void *arg) {
     (void)arg;
     // Wait for the start routine to decrypt the code (it runs right after library init).
@@ -351,6 +417,13 @@ static void *worker(void *arg) {
     // The path table and its lock are created later; the hook only runs once the game uses them.
     hook_path_md5_install();
     batch_install_step_install();
+    const site kd = {"key down", FN_KEY_DOWN, KEY_DOWN_ORIG, ""}, ku = {"key up", FN_KEY_UP, KEY_UP_ORIG, ""};
+    if (matches(&kd) && matches(&ku)) {
+        key_hook("key down", FN_KEY_DOWN, (void *)&hook_key_down);
+        key_hook("key up", FN_KEY_UP, (void *)&hook_key_up);
+    } else {
+        logline("key down/up code differs; keys not added");
+    }
     pthread_t t;
     pthread_create(&t, NULL, stats, NULL);
     pthread_detach(t);

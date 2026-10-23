@@ -97,10 +97,23 @@ into `0x100ba1190`, which:
 
 The song-search text is drawn by native code from the game keyboard, not by a Flash text field.
 
-Fixes, added once the game has filled each table and re-checked every 100 ms:
+End: `0x101909f20[0x77]` (`kVK_End`) = `0x23` (Scaleform End), added once the game has filled the
+table and re-checked every 100 ms. Home (`0x73`) was mapped, End wasn't.
 
-- `0x101909f20[0x77]` (`kVK_End`) = `0x23` (Scaleform End). Home (`0x73`) was mapped, End wasn't.
-- `0x101921c60[' ']` = `0x39` (`KEY_SPACE`). The table had only `0-9`, `A-Z`, `a-z`.
+Game keyboard: `0x101135520` (key down) and `0x101135560` (key up), called only from
+`0x100ba140e` and `0x100ba144e`, map characters 1-255 through `0x101921c60` (read nowhere else)
+into the state array. That table holds only `0-9`, `A-Z`, `a-z`, and the caller passes only the
+low byte of the character (Cocoa's `0xF700` for Up arrives as `0`), so space (in the song search),
+Enter, Esc, Tab, Backspace, arrows, function keys,
+Home/End/Page keys and punctuation never reached the game keyboard; the Scale Racer menu, which
+reads it, ignored them. The caller keeps the full character at `-0x28(%rbp)` (stored at
+`0x100ba1332`), so both functions now start with `mov -0x28(%rbp), %edx` and a jump to
+replacements that use the table as before and map the missing keys from the full character.
+
+The game numbers its keys compactly, not as DirectInput does: `KEY_UP` is `0x79`, not `0xC8`. The
+values are set together with their names (`KEY_NOKEY`, `KEY_ESCAPE`, ...) in code from
+`0x100b7f700` onwards; all 145 are in name order. Patched only if both functions' original bytes
+match.
 
 Letters such as `ä ö å` can't be added this way: the search text builder accepts only some
 keys (mapping them to the `'` `;` `[` keys added nothing).
