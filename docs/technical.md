@@ -28,7 +28,8 @@ The installer's weak load command requires no minimum library version (compatibi
 whose compatibility version is lower than its load command requires, silently for a weak one.
 Up to v1.0.3 the command required 1.0 and the library had 0.0, so on older macOS (such as 10.15
 on Intel Macs) the fixes never loaded; newer dyld no longer checks this. Library 1.0 satisfies
-those old commands too, so reinstalling is enough.
+those old commands too, so reinstalling is enough. Confirmed with v1.0.4 on an Intel Mac mini
+with macOS 10.15.7, where the game runs natively.
 
 The game's `__text` is encrypted on disk and decrypted by its start routine (the
 `LC_UNIXTHREAD` entry) after dyld has run the library initializers. The library's constructor

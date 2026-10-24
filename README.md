@@ -1,7 +1,8 @@
 # Rocksmith 2014 Mac Fixes
 
-Fixes for **Rocksmith 2014 Remastered** on macOS (Steam version). Tested on Apple Silicon;
-Intel Macs should work the same but are untested.
+Fixes for **Rocksmith 2014 Remastered** on macOS (Steam version). They work on Apple Silicon
+and Intel Macs, tested on an Apple Silicon Mac with current macOS and on an Intel Mac mini with
+macOS 10.15. On older macOS, use v1.0.4 or later: earlier versions didn't load there.
 
 - **Much faster startup with lots of DLC or custom songs.** With about 2,400 songs, the game
   spent about two minutes enumerating them every time it started. With the fixes it takes
