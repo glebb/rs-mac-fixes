@@ -23,6 +23,13 @@ the original; the backup is left in place.
 The constructor only acts in an executable named `Rocksmith2014` whose `__TEXT` matches the
 size above and whose `__DATA` covers the tables used below.
 
+The installer's weak load command requires no minimum library version (compatibility version
+0), and the library itself has compatibility version 1.0. dyld before macOS 12 skips a library
+whose compatibility version is lower than its load command requires, silently for a weak one.
+Up to v1.0.3 the command required 1.0 and the library had 0.0, so on older macOS (such as 10.15
+on Intel Macs) the fixes never loaded; newer dyld no longer checks this. Library 1.0 satisfies
+those old commands too, so reinstalling is enough.
+
 The game's `__text` is encrypted on disk and decrypted by its start routine (the
 `LC_UNIXTHREAD` entry) after dyld has run the library initializers. The library's constructor
 therefore starts a thread that polls (every 200 µs, up to 60 s) until the expected original
@@ -143,5 +150,5 @@ missing log with the fixes installed means dyld didn't load it.
 
 `rs-mac-fixes report` writes `~/Desktop/rs-mac-fixes-report.txt`: system, the executable's
 architectures, `__TEXT` size, non-system libraries it loads, code signature, whether the
-installed library matches the installer's, quarantine attributes, settings and the last 64 KB of
+installed library matches the installer's, its version against the one the load command requires, quarantine attributes, settings and the last 64 KB of
 the log, with `$HOME` replaced by `~`.

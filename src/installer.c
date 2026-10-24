@@ -328,7 +328,9 @@ static int add_command(macho *m) {
     dc->cmdsize = (uint32_t)size;
     dc->dylib.name.offset = sizeof *dc;
     dc->dylib.timestamp = 2;
-    dc->dylib.current_version = dc->dylib.compatibility_version = 0x10000;
+    // No minimum version: dyld before macOS 12 skips a library older than this requires.
+    dc->dylib.current_version = 0x10000;
+    dc->dylib.compatibility_version = 0;
     memcpy((char *)dc + sizeof *dc, LOAD_PATH, name);
     m->mh->ncmds++;
     m->mh->sizeofcmds += (uint32_t)size;
@@ -505,12 +507,18 @@ static const char *arch_name(cpu_type_t t) {
     return t == CPU_TYPE_X86_64 ? "x86_64" : t == CPU_TYPE_ARM64 ? "arm64" : t == CPU_TYPE_I386 ? "i386" : "other";
 }
 
-static void report_exe(FILE *out, const char *lib) {
+static const char *version(uint32_t v, char *out, size_t n) {
+    snprintf(out, n, "%u.%u.%u", v >> 16, (v >> 8) & 0xff, v & 0xff);
+    return out;
+}
+
+// Returns the library version our load command requires, or -1 if there is none.
+static int64_t report_exe(FILE *out, const char *lib) {
     struct stat st;
     char t[32];
     if (stat(g_exe, &st)) {
         field(out, "Executable:", "can't read: %s", strerror(errno));
-        return;
+        return -1;
     }
     field(out, "Executable:", "%lld bytes, changed %s", (long long)st.st_size, when(st.st_mtime, t, sizeof t));
     macho m;
@@ -518,7 +526,7 @@ static void report_exe(FILE *out, const char *lib) {
     if (!m.data || m.len < 8) {
         field(out, "", "can't read: %s", strerror(errno));
         free(m.data);
-        return;
+        return -1;
     }
     char archs[128] = "";
     if (*(uint32_t *)m.data == FAT_CIGAM) {
@@ -534,7 +542,7 @@ static void report_exe(FILE *out, const char *lib) {
     if (parse(&m)) {
         field(out, "", "x86_64 code not readable as a Mach-O");
         free(m.data);
-        return;
+        return -1;
     }
     field(out, "", "__TEXT size 0x%llx (%s)", (unsigned long long)m.text_size,
          m.text_size == KNOWN_TEXT_SIZE ? "the build the fixes were made for" : "a different build");
@@ -558,10 +566,13 @@ static void report_exe(FILE *out, const char *lib) {
                               : m.ours                      ? "partly installed (library missing)"
                               : access(lib, F_OK) == 0      ? "partly installed (load command missing)"
                                                             : "not installed");
+    int64_t required = m.ours ? ((struct dylib_command *)(m.data + m.ours))->dylib.compatibility_version : -1;
     free(m.data);
+    return required;
 }
 
-static void report_lib(FILE *out, const char *lib) {
+// required: what report_exe returned. dyld before macOS 12 skips a library older than that.
+static void report_lib(FILE *out, const char *lib, int64_t required) {
     struct stat st;
     char t[32];
     if (stat(lib, &st)) {
@@ -571,9 +582,22 @@ static void report_lib(FILE *out, const char *lib) {
     size_t len = 0;
     uint8_t *d = read_file(lib, &len);
     int same = d && len == librsmacfixes_dylib_len && !memcmp(d, librsmacfixes_dylib, len);
+    int64_t provided = -1;
+    const struct mach_header_64 *mh = (const void *)d;
+    if (d && len >= sizeof *mh && mh->magic == MH_MAGIC_64 && sizeof *mh + mh->sizeofcmds <= len) {
+        const uint8_t *p = d + sizeof *mh;
+        for (uint32_t i = 0; i < mh->ncmds && provided < 0; i++, p += ((const struct load_command *)p)->cmdsize)
+            if (((const struct load_command *)p)->cmd == LC_ID_DYLIB)
+                provided = ((const struct dylib_command *)p)->dylib.compatibility_version;
+    }
     free(d);
     field(out, "Library:", "%lld bytes, written %s, %s", (long long)st.st_size, when(st.st_mtime, t, sizeof t),
          same ? "same as this installer's" : "differs from this installer's (run install to update)");
+    char a[16], b[16];
+    if (required >= 0 && provided >= 0)
+        field(out, "", "version %s, the game requires %s%s", version((uint32_t)provided, a, sizeof a),
+             version((uint32_t)required, b, sizeof b),
+             provided < required ? ": older macOS won't load it (run install to update)" : "");
 }
 
 static const char *quarantine(const char *path) {
@@ -634,8 +658,7 @@ static int report(int interactive) {
     lib_path(lib, sizeof lib);
     field(out, "Game:", "%s", g_macos);
     field(out, "Running:", "%s", game_running() ? "yes" : "no");
-    report_exe(out, lib);
-    report_lib(out, lib);
+    report_lib(out, lib, report_exe(out, lib));
     snprintf(p, sizeof p, "%s" BACKUP_SUFFIX, g_exe);
     field(out, "Backup:", "%s", access(p, F_OK) == 0 ? "yes" : "no");
     field(out, "Quarantine:", "executable %s, library %s", quarantine(g_exe), quarantine(lib));
