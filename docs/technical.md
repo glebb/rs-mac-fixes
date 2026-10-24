@@ -4,17 +4,31 @@ For the Steam build of Rocksmith 2014 Remastered for macOS whose x86_64 `__TEXT`
 `0x17e7000` bytes (vmaddr `0x100000000`). Addresses below are unslid. The library checks this
 layout and the exact original bytes at every patch site before changing anything.
 
-## Loading
+## Installing
+
+The installer looks for the game (Steam app 221680) in `~/Library/Application Support/Steam`,
+then in each library listed in `libraryfolders.vdf` (using the `installdir` from the app's
+`appmanifest_221680.acf`), then in a few `/Applications` locations. Failing that it asks for
+the folder; `--game` sets it directly. It refuses to install or uninstall while the game runs.
 
 The executable is not code signed, so the installer adds an `LC_LOAD_WEAK_DYLIB` command for
-`@executable_path/librsmacfixes.dylib` to its x86_64 slice, using the free space after the
-existing load commands. Weak: a missing library is skipped by dyld.
+`@executable_path/librsmacfixes.dylib` to its x86_64 slice, using the zeroed space after the
+existing load commands. Weak: a missing library is skipped by dyld. The executable is copied to
+`Rocksmith2014.rs-mac-fixes-backup` before its first change. Uninstalling removes the command,
+moves any later commands back and zeroes the freed bytes, so the executable is byte-identical to
+the original; the backup is left in place.
+
+## Loading
+
+The constructor only acts in an executable named `Rocksmith2014` whose `__TEXT` matches the
+size above and whose `__DATA` covers the tables used below.
 
 The game's `__text` is encrypted on disk and decrypted by its start routine (the
 `LC_UNIXTHREAD` entry) after dyld has run the library initializers. The library's constructor
-therefore starts a thread that polls (every 200 µs, up to 60 s) until all expected original
-bytes are present, then patches. Patching uses `vm_protect(... VM_PROT_COPY)`; under Rosetta,
-the translated code is invalidated by the write.
+therefore starts a thread that polls (every 200 µs, up to 60 s) until the expected original
+bytes of the startup fixes are present, then patches; the keyboard sites are checked once after
+that. Patching uses `vm_protect(... VM_PROT_COPY)`; under Rosetta, the translated code is
+invalidated by the write.
 
 How the causes were found: stack samples of the game during the scan (`sample <pid>`), a copy
 of the decrypted `__TEXT` read from the running process with `mach_vm_read`, and disassembly of
@@ -103,10 +117,10 @@ table and re-checked every 100 ms. Home (`0x73`) was mapped, End wasn't.
 Game keyboard: `0x101135520` (key down) and `0x101135560` (key up), called only from
 `0x100ba140e` and `0x100ba144e`, map characters 1-255 through `0x101921c60` (read nowhere else)
 into the state array. That table holds only `0-9`, `A-Z`, `a-z`, and the caller passes only the
-low byte of the character (Cocoa's `0xF700` for Up arrives as `0`), so space (in the song search),
-Enter, Esc, Tab, Backspace, arrows, function keys,
-Home/End/Page keys and punctuation never reached the game keyboard; the Scale Racer menu, which
-reads it, ignored them. The caller keeps the full character at `-0x28(%rbp)` (stored at
+low byte of the character (Cocoa's `0xF700` for Up arrives as `0`), so space (in the song
+search), Enter, Esc, Tab, Backspace, arrows, function keys, Home/End/Page keys and punctuation
+never reached the game keyboard; Guitarcade menus such as Scale Racer's, which read it, ignored
+them. The caller keeps the full character at `-0x28(%rbp)` (stored at
 `0x100ba1332`), so both functions now start with `mov -0x28(%rbp), %edx` and a jump to
 replacements that use the table as before and map the missing keys from the full character.
 

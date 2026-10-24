@@ -90,8 +90,8 @@ the fixes' log. Your home folder is shown as `~`, so it doesn't include your use
 - It adds one line to the game executable telling it to load that file. The executable is
   backed up first, as `Rocksmith2014.rs-mac-fixes-backup` in the same folder.
 
-Uninstalling removes both again. Nothing else in the game folder is changed, and song files
-are never touched.
+Uninstalling removes both again and leaves the backup in place; you can delete it. Nothing else
+in the game folder is changed, and song files are never touched.
 
 ## Why it was slow
 
@@ -109,9 +109,10 @@ Startup had three problems, each worse the more songs you have:
 Mounting faster also meant keeping more song files open at once than macOS allows a game by
 default (256), so the fixes raise that limit; otherwise songs would go missing from the list.
 
-The keyboard problems were two missing entries in the game's key tables: macOS's End key had
-no entry, and the table that passes typed characters to the search box only had letters and
-digits.
+The keyboard problems were gaps in the game's key tables. macOS's End key had no entry in the
+table the menus use. The game's own keyboard, which the song search and the Guitarcade menus
+read, only knew letters and digits, and keys such as the arrows didn't even reach it intact.
+The fixes fill in the missing keys.
 
 Details for developers: [docs/technical.md](docs/technical.md).
 
